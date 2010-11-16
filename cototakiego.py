@@ -38,9 +38,9 @@ def safe_call(function, *args, **kwargs):
         traceback.print_exc(e)
         
         
-def event(method): # rename to user_action
+def running_event(method): # rename to user_action
     def event_method(self, *args, **kwargs):
-        if self.process_events:
+        if not self.over:
             return method(self, *args, **kwargs)
         return True
     return event_method
@@ -149,9 +149,9 @@ class Game:
         def __init__(self, data):
             self.data = data
             self.on_level_up = None
-            self.process_events = True # XXX: or False?
+            self.over = False # XXX: or False?
             
-        @event
+        @running_event
         def on_key_up(self):
             self.data.direction = Game.Data.positions[ \
                             Game.Data.positions.index(self.data.direction) - 1]
@@ -160,7 +160,7 @@ class Game:
                 self.data.position = self.data.position - 1
             return True
             
-        @event
+        @running_event
         def on_key_right(self):
             if self.data.position == self.data.width - 1 or \
                                 (self.data.direction in ('right', 'left') and \
@@ -169,18 +169,12 @@ class Game:
             self.data.position = self.data.position + 1
             return True
         
-        @event
+        @running_event
         def on_key_left(self):
             if self.data.position == 0:
                 return False
             self.data.position = self.data.position - 1
             return True
-        
-        def pause_events(self):
-            self._process_events = False
-            
-        def resume_events(self):
-            self._provess_events = True
             
         def endgame(self):
             print '\nGAME OVER'
@@ -191,7 +185,7 @@ class Game:
                 self.data.sequence.append((random.choice(available), \
                                 random.choice(available)))
         
-        @event
+        @running_event
         def drop(self):
             position = self.data.position
             orientation = self.data.direction
@@ -213,14 +207,13 @@ class Game:
             self.put(falling[second[0]], second[1] + position)
             
             # enter main loop
-            self.pause_events()
             result = self.check()
             while result == Game.Engine.POPPED:
                 result = self.check()
             if result != Game.Engine.GAME_OVER:
                 self.next_turn()
-                self.resume_events()
             else:
+                self.over = True
                 self.endgame()
             stdout.write('\rscore: ' + str(self.data.score) + \
                                             ' bonus: ' + str(self.data.bonus))
@@ -301,7 +294,6 @@ class Game:
                         chains.append((chain, self.data.brands_data[ball]))
             return chains
         
-        @event
         def undo(self):
             self.data.restore()
             
