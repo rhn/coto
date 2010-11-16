@@ -1,17 +1,9 @@
 #!/usr/bin/python
 # -*- coding: utf8 -*-
-import gtk
-import pygtk
-pygtk.require('2.0')
-import random
-from sys import stdout
-from pango import Layout
-
-__version__ = '0.1.3'
 
 """
     cototakiego.py - a clone of OpenAlchemist in Pygtk
-    Copyright (C) 2007  Paweł Czaplejewicz
+    Copyright (C) 2007, 2010  rhn
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -26,6 +18,32 @@ __version__ = '0.1.3'
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
+
+
+import gtk
+import pygtk
+pygtk.require('2.0')
+import random
+from sys import stdout
+from pango import Layout
+import traceback
+
+__version__ = '0.1.3'
+
+
+def safe_call(function, *args, **kwargs):
+    try:
+        return function(*args, **kwargs)
+    except Exception, e:
+        traceback.print_exc(e)
+        
+        
+def event(method): # rename to user_action
+    def event_method(self, *args, **kwargs):
+        if self.process_events:
+            return method(self, *args, **kwargs)
+        return True
+    return event_method
 
 class Game:
     class UI:
@@ -49,11 +67,38 @@ class Game:
                 ball_size = int(ball_size)
                 return ((border_x, border_y), 
                         (border_x + ball_size + distance, border_y)), ball_size
-                       
-        # TODO: switch to relative values
+        
+        class TypesView: # XXX: make it a DrawingArea
+            def __init__(self, rectangle, level=0):
+                self.rectangle = rectangle
+                self.level = level
+            
+            def draw(self, graphics_data):
+		# draw the brands
+		left, top, width, height = self.rectangle
+		yoffset = top + 10
+		xoffset = left + 5
+		size = 15
+		distance = 10
+		w = size + distance
+		for i, brand in enumerate(Game.Data.brands[:self.level + 1]):
+		    graphics_data.gc.set_foreground(graphics_data.styles[brand])
+		    graphics_data.window.draw_arc(graphics_data.gc, True, xoffset, yoffset + i * w, \
+		                                            size, size, 0, 360 * 64)
+		    graphics_data.pango_layout.set_text(str(Game.Data.brands_data[brand]))
+		    graphics_data.window.draw_layout(graphics_data.gc, xoffset + int(size * 1.5), \
+		                            yoffset + i * w + 3, graphics_data.pango_layout)
+        
+        class GraphicsData:
+            def __init__(self, window, gc, pango_layout):
+                self.styles = {}
+                self.gc = gc
+                self.window = window
+                self.pango_layout = pango_layout
+                
+        # TODO: remove in favor of autopacking
         preview_rectangle = (80, 0, 200, 20)
         board_rectangle = (80, 20, 200, 300)
-        brands_rectangle = (0, 0, 80, 300)
         scores_rectangle = (200, 0, 250, 300)
             
     class Data:
@@ -95,9 +140,7 @@ class Game:
             self.previous_balls = None
             self.score, self.bonus = self.last_score
         
-    class Anim:
-        lasts = False
-    
+        
     class Engine:
         POPPED = 0
         EMPTY = 1
@@ -105,13 +148,10 @@ class Game:
         
         def __init__(self, data):
             self.data = data
-            # keybindings return True if redraw is needed
-            self.keybindings = {'Up': self.on_key_up,
-                                'Right': self.on_key_right,
-                                'Left': self.on_key_left,
-                                'Down': lambda: any((True, self.drop())),
-                                'F5': lambda: any((True, self.undo()))}
+            self.on_level_up = None
+            self.process_events = True # XXX: or False?
             
+        @event
         def on_key_up(self):
             self.data.direction = Game.Data.positions[ \
                             Game.Data.positions.index(self.data.direction) - 1]
@@ -120,6 +160,7 @@ class Game:
                 self.data.position = self.data.position - 1
             return True
             
+        @event
         def on_key_right(self):
             if self.data.position == self.data.width - 1 or \
                                 (self.data.direction in ('right', 'left') and \
@@ -128,18 +169,18 @@ class Game:
             self.data.position = self.data.position + 1
             return True
         
+        @event
         def on_key_left(self):
             if self.data.position == 0:
                 return False
             self.data.position = self.data.position - 1
             return True
         
-        def lock_keys(self):
-            self.keybindings_backup = self.keybindings
-            self.keybindings = {}
+        def pause_events(self):
+            self._process_events = False
             
-        def unlock_keys(self):
-            self.keybindings = self.keybindings_backup
+        def resume_events(self):
+            self._provess_events = True
             
         def endgame(self):
             print '\nGAME OVER'
@@ -150,6 +191,7 @@ class Game:
                 self.data.sequence.append((random.choice(available), \
                                 random.choice(available)))
         
+        @event
         def drop(self):
             position = self.data.position
             orientation = self.data.direction
@@ -171,13 +213,13 @@ class Game:
             self.put(falling[second[0]], second[1] + position)
             
             # enter main loop
-            self.lock_keys()
+            self.pause_events()
             result = self.check()
             while result == Game.Engine.POPPED:
                 result = self.check()
             if result != Game.Engine.GAME_OVER:
                 self.next_turn()
-                self.unlock_keys()
+                self.resume_events()
             else:
                 self.endgame()
             stdout.write('\rscore: ' + str(self.data.score) + \
@@ -227,7 +269,8 @@ class Game:
             index = brands.index(balls[col][line]) + 1
             if index > self.data.level:
                 self.data.level = index
-                print 'LEVEL:', brands[index], '(' + str(index) + ')'
+                if self.on_level_up is not None:
+                    safe_call(self.on_level_up, index)
             balls[col][line] = brands[index]
             return self.data.brands_data[brands[index]]
                 
@@ -257,7 +300,8 @@ class Game:
                     if len(chain) >= 3:
                         chains.append((chain, self.data.brands_data[ball]))
             return chains
-                    
+        
+        @event
         def undo(self):
             self.data.restore()
             
@@ -273,7 +317,10 @@ class Game:
         
         self.game = None
         self.data = None
+        self.graphics_data = None
         
+        self.types_view = None
+                
     def on_destroy(self, widget,  data=None):
         gtk.main_quit()
         
@@ -281,27 +328,47 @@ class Game:
         self.redraw()
         
     def on_realize(self, widget, data=None):
-        self.window = widget.window
-        self.gc = self.window.new_gc()
+        window = widget.window
+        gc = window.new_gc()
+        if self.graphics_data is None:
+            context = self.da.get_pango_context()
+            pango_layout = Layout(context)
+            self.graphics_data = Game.UI.GraphicsData(window, gc, pango_layout)
+            colormap = self.da.get_colormap()
+            for name in Game.Data.brands:
+                print name
+                self.graphics_data.styles[name] = colormap.alloc_color(name)
+        
+        if self.types_view is None:
+            self.types_view = Game.UI.TypesView((0, 0, 80, 300))
+
         if not self.game or not self.data:
             self.data = Game.Data()
             self.game = Game.Engine(self.data)
-            self.data.styles = {}
-            context = self.da.get_pango_context()
-            self.data.layout = Layout(context)
+            # keybindings return True if redraw is needed
+            self.keybindings = {'Up': self.game.on_key_up,
+                                'Right': self.game.on_key_right,
+                                'Left': self.game.on_key_left,
+                                'Down': lambda: any((True, self.game.drop())),
+                                'F5': lambda: any((True, self.game.undo()))}
+
+            self.game.on_level_up = self.level_up
+            self.types_view.level = self.data.level
             self.preview = Game.UI.Preview()
-            colormap = self.da.get_colormap()
-            for name in self.data.brands:
-                print name
-                self.data.styles[name] = colormap.alloc_color(name)
             self.game.next_turn()
+
+    def level_up(self, level):
+        self.types_view.level = level
+        print 'LEVEL:', Game.Data.brands[level], '(' + str(level) + ')'
 
     def on_keydown(self, widget, event, user_param1=None, *args):
         try:
-            action = self.game.keybindings[gtk.gdk.keyval_name(event.keyval)]
-        except:
+            action = self.keybindings[gtk.gdk.keyval_name(event.keyval)]
+        except Exception, e:
+            print e
             print gtk.gdk.keyval_name(event.keyval)
             return False
+
         if action():
             self.redraw()
         return True
@@ -311,7 +378,7 @@ class Game:
         gtk.main()
         
     def redraw(self):
-        self.window.clear()
+        self.graphics_data.window.clear()
         next_y = 20
         pad_left = 12
         
@@ -322,8 +389,8 @@ class Game:
         for i, xy in enumerate(coords_list):
             x, y = xy
             ball = next[i]
-            self.gc.set_foreground(self.data.styles[ball])
-            self.window.draw_arc(self.gc, True, left + x, top + y, \
+            self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
+            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, left + x, top + y, \
                                                     size, size, 0, 360 * 64)
         
         # draw next pair
@@ -352,30 +419,17 @@ class Game:
             x, y = xy[0], xy[1]
             x, y = x * w + diff + left, y * w + top
             # x2, y2 = x2 * w + diff + left, y2 * w + top
-            self.gc.set_foreground(self.data.styles[ball])
-            self.window.draw_arc(self.gc, True, x, y, size, size, 0, 360 * 64)
+            self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
+            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, x, y, size, size, 0, 360 * 64)
         
         # draw the field
         for c, column in enumerate(self.data.balls):
             for l, ball in enumerate(column):
-                self.gc.set_foreground(self.data.styles[ball])
-                self.window.draw_arc(self.gc, True, \
+                self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
+                self.graphics_data.window.draw_arc(self.graphics_data.gc, True, \
                                         left + c * w, top + height - l * w, \
                                         size, size, 0, 360 * 64)
-        
-        # draw the brands
-        left, top, width, height = Game.UI.brands_rectangle
-        yoffset = top + 10
-        xoffset = left + 5
-        size = 15
-        distance = 10
-        w = size + distance
-        for i, brand in enumerate(self.data.brands[:self.data.level + 1]):
-            self.gc.set_foreground(self.data.styles[brand])
-            self.window.draw_arc(self.gc, True, xoffset, yoffset + i * w, \
-                                                    size, size, 0, 360 * 64)
-            self.data.layout.set_text(str(self.data.brands_data[brand]))
-            self.window.draw_layout(self.gc, xoffset + int(size * 1.5), \
-                                    yoffset + i * w + 3, self.data.layout)
 
+        self.types_view.draw(self.graphics_data)
+        
 Game().run()
