@@ -28,8 +28,6 @@ from sys import stdout
 from pango import Layout
 import traceback
 
-__version__ = '0.1.3'
-
 
 def safe_call(function, *args, **kwargs):
     try:
@@ -74,20 +72,20 @@ class Game:
                 self.level = level
             
             def draw(self, graphics_data):
-		# draw the brands
-		left, top, width, height = self.rectangle
-		yoffset = top + 10
-		xoffset = left + 5
-		size = 15
-		distance = 10
-		w = size + distance
-		for i, brand in enumerate(Game.Data.brands[:self.level + 1]):
-		    graphics_data.gc.set_foreground(graphics_data.styles[brand])
-		    graphics_data.window.draw_arc(graphics_data.gc, True, xoffset, yoffset + i * w, \
-		                                            size, size, 0, 360 * 64)
-		    graphics_data.pango_layout.set_text(str(Game.Data.brands_data[brand]))
-		    graphics_data.window.draw_layout(graphics_data.gc, xoffset + int(size * 1.5), \
-		                            yoffset + i * w + 3, graphics_data.pango_layout)
+                # draw the brands
+                left, top, width, height = self.rectangle
+                yoffset = top + 10
+                xoffset = left + 5
+                size = 15
+                distance = 10
+                w = size + distance
+                for i, brand in enumerate(Game.Data.brands[:self.level + 1]):
+                    graphics_data.gc.set_foreground(graphics_data.styles[brand])
+                    graphics_data.window.draw_arc(graphics_data.gc, True, xoffset, yoffset + i * w, \
+                                                            size, size, 0, 360 * 64)
+                    graphics_data.pango_layout.set_text(str(Game.Data.brands_data[brand]))
+                    graphics_data.window.draw_layout(graphics_data.gc, xoffset + int(size * 1.5), \
+                                            yoffset + i * w + 3, graphics_data.pango_layout)
         
         class GraphicsData:
             def __init__(self, window, gc, pango_layout):
@@ -95,6 +93,7 @@ class Game:
                 self.gc = gc
                 self.window = window
                 self.pango_layout = pango_layout
+                self.cutoff_line_style = None
                 
         # TODO: remove in favor of autopacking
         preview_rectangle = (80, 0, 200, 20)
@@ -330,6 +329,7 @@ class Game:
             for name in Game.Data.brands:
                 print name
                 self.graphics_data.styles[name] = colormap.alloc_color(name)
+            self.graphics_data.cutoff_line_style = (colormap.alloc_color('white'), colormap.alloc_color('black'))
         
         if self.types_view is None:
             self.types_view = Game.UI.TypesView((0, 0, 80, 300))
@@ -387,9 +387,9 @@ class Game:
         
         # draw next pair
         # TODO: ugly, change it
-        size = 20
-        distance = 4
-        w = size + distance
+        ball_size = 20
+        ball_spacing = 4
+        w = ball_size + ball_spacing
         diff = self.data.position * w
         left, top, width, height = Game.UI.board_rectangle
         next = self.data.sequence[0]
@@ -412,7 +412,7 @@ class Game:
             x, y = x * w + diff + left, y * w + top
             # x2, y2 = x2 * w + diff + left, y2 * w + top
             self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
-            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, x, y, size, size, 0, 360 * 64)
+            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, x, y, ball_size, ball_size, 0, 360 * 64)
         
         # draw the field
         for c, column in enumerate(self.data.balls):
@@ -420,7 +420,15 @@ class Game:
                 self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
                 self.graphics_data.window.draw_arc(self.graphics_data.gc, True, \
                                         left + c * w, top + height - l * w, \
-                                        size, size, 0, 360 * 64)
+                                        ball_size, ball_size, 0, 360 * 64)
+        
+        # draw the cutoff line
+        color_up, color_down = self.graphics_data.cutoff_line_style
+        y = top + height - (self.data.height - 1) * w - ball_spacing / 2
+        self.graphics_data.gc.set_foreground(color_up)
+        self.graphics_data.window.draw_line(self.graphics_data.gc, left, y - 1, left + width, y - 1)
+        self.graphics_data.gc.set_foreground(color_down)
+        self.graphics_data.window.draw_line(self.graphics_data.gc, left, y, left + width, y)
 
         self.types_view.draw(self.graphics_data)
         
