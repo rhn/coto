@@ -27,6 +27,7 @@ import random
 from sys import stdout
 from pango import Layout
 import traceback
+import time
 
 
 def safe_call(function, *args, **kwargs):
@@ -40,8 +41,23 @@ def running_event(method): # rename to user_action
     def event_method(self, *args, **kwargs):
         if not self.over:
             return method(self, *args, **kwargs)
-        return True
+        return False
     return event_method
+
+
+def engine_interaction(method):
+    def interaction_wrapper(self, *args, **kwargs):
+        try:
+            redraw = method(self, *args, **kwargs)
+        except Exception, e:
+            print e
+            return False
+
+        if redraw:
+            self.redraw()
+        return True
+    return interaction_wrapper
+
 
 class Game:
     class UI:
@@ -151,7 +167,7 @@ class Game:
             self.over = False # XXX: or False?
             
         @running_event
-        def on_key_up(self):
+        def rotate(self):
             self.data.direction = Game.Data.positions[ \
                             Game.Data.positions.index(self.data.direction) - 1]
             if self.data.position == self.data.width - 1 \
@@ -160,7 +176,7 @@ class Game:
             return True
             
         @running_event
-        def on_key_right(self):
+        def shift_right(self):
             if self.data.position == self.data.width - 1 or \
                                 (self.data.direction in ('right', 'left') and \
                                 self.data.position == self.data.width - 2):
@@ -169,7 +185,7 @@ class Game:
             return True
         
         @running_event
-        def on_key_left(self):
+        def shift_left(self):
             if self.data.position == 0:
                 return False
             self.data.position = self.data.position - 1
@@ -217,6 +233,7 @@ class Game:
             stdout.write('\rscore: ' + str(self.data.score) + \
                                             ' bonus: ' + str(self.data.bonus))
             stdout.flush()
+            return True
         
         def put(self, brand, column):
             if len(self.data.balls[column]) < self.data.height:
@@ -295,7 +312,10 @@ class Game:
         
         def undo(self):
             self.data.restore()
-            
+            return True
+    
+    MINIMUM_MOUSE_INTERVAL = 0.2
+    
     def __init__(self):
         self.w = gtk.Window()
         self.da = gtk.DrawingArea()
@@ -303,8 +323,10 @@ class Game:
         self.w.connect('destroy', self.on_destroy)
         self.da.connect('expose-event', self.on_expose)
         self.da.connect('realize', self.on_realize)
+        self.da.set_events(gtk.gdk.BUTTON_PRESS_MASK)
         self.w.connect('key-press-event', self.on_keydown)
         self.w.set_default_size(250, 350)
+        self.last_mouse_event = time.time()
         
         self.game = None
         self.data = None
@@ -330,6 +352,9 @@ class Game:
                 print name
                 self.graphics_data.styles[name] = colormap.alloc_color(name)
             self.graphics_data.cutoff_line_style = (colormap.alloc_color('white'), colormap.alloc_color('black'))
+            
+            # clickety portion
+            self.da.connect('button-press-event', self.on_mouse_press)
         
         if self.types_view is None:
             self.types_view = Game.UI.TypesView((0, 0, 80, 300))
@@ -338,9 +363,9 @@ class Game:
             self.data = Game.Data()
             self.game = Game.Engine(self.data)
             # keybindings return True if redraw is needed
-            self.keybindings = {'Up': self.game.on_key_up,
-                                'Right': self.game.on_key_right,
-                                'Left': self.game.on_key_left,
+            self.keybindings = {'Up': self.game.rotate,
+                                'Right': self.game.shift_right,
+                                'Left': self.game.shift_left,
                                 'Down': lambda: any((True, self.game.drop())),
                                 'F5': lambda: any((True, self.game.undo()))}
 
@@ -349,21 +374,43 @@ class Game:
             self.preview = Game.UI.Preview()
             self.game.next_turn()
 
+    @engine_interaction
+    def on_mouse_press(self, widget, event, data=None):
+        """top 1/3: rotation, bottom triangle: drop, sides: move"""
+        now = time.time()
+        prev_mouse_event = self.last_mouse_event
+        self.last_mouse_event = now
+        if now - prev_mouse_event < self.MINIMUM_MOSE_INTERVAL:
+            return False
+            
+        rect = self.da.get_allocation()
+        x = event.x - rect.x
+        y = event.y - rect.y
+        
+        if y < rect.height / 3:
+            return self.game.rotate()
+        if x > rect.width / 2:
+            if rect.width - x < rect.height - y:
+                return self.game.shift_right()
+            else:
+                return self.game.drop()
+        else:
+            if x < rect.height - y:
+                return self.game.shift_left()
+            else:
+                return self.game.drop()
+
     def level_up(self, level):
         self.types_view.level = level
         print 'LEVEL:', Game.Data.brands[level], '(' + str(level) + ')'
 
+    @engine_interaction
     def on_keydown(self, widget, event, user_param1=None, *args):
         try:
             action = self.keybindings[gtk.gdk.keyval_name(event.keyval)]
         except Exception, e:
-            print e
-            print gtk.gdk.keyval_name(event.keyval)
             return False
-
-        if action():
-            self.redraw()
-        return True
+        return action()
     
     def run(self):
         self.w.show_all()
