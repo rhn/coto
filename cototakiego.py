@@ -31,6 +31,8 @@ import time
 
 
 def safe_call(function, *args, **kwargs):
+    if function is None:
+        return
     try:
         return function(*args, **kwargs)
     except Exception, e:
@@ -65,7 +67,6 @@ def get_ball_styles(colormap):
         styles[name] = colormap.alloc_color(name)
     return styles
  
-
 
 class Game:
     class UI:
@@ -141,11 +142,7 @@ class Game:
                 self.window = window
                 self.pango_layout = pango_layout
                 self.cutoff_line_style = None
-                
-        # TODO: remove in favor of autopacking
-        preview_rectangle = (80, 0, 200, 20)
-        board_rectangle = (80, 20, 200, 300)
-        scores_rectangle = (200, 0, 250, 300)
+
             
     class Data:
         width = 6
@@ -198,6 +195,7 @@ class Game:
             self.on_level_change = None
             self.on_score_change = None
             self.on_preview_change = None
+            self.on_endgame = None
             self.over = False # XXX: or False?
             
         @running_event
@@ -226,7 +224,7 @@ class Game:
             return True
             
         def endgame(self):
-            print '\nGAME OVER'
+            safe_call(self.on_endgame)
             
         def update_sequence(self):
             available = Game.Data.brands[:max(self.data.level, 3)]
@@ -265,15 +263,13 @@ class Game:
             # enter main loop
             result = self.check()
             while result == Game.Engine.POPPED:
+                safe_call(self.on_score_change, self.data.score, self.data.bonus)
                 result = self.check()
             if result != Game.Engine.GAME_OVER:
                 self.next_turn()
             else:
                 self.over = True
                 self.endgame()
-            stdout.write('\rscore: ' + str(self.data.score) + \
-                                            ' bonus: ' + str(self.data.bonus))
-            stdout.flush()
             return True
         
         def put(self, brand, column):
@@ -319,8 +315,8 @@ class Game:
             index = brands.index(balls[col][line]) + 1
             if index > self.data.level:
                 self.data.level = index
-                if self.on_level_up is not None:
-                    safe_call(self.on_level_up, index)
+                safe_call(self.on_level_up, index)
+                safe_call(self.on_level_change, index)
             balls[col][line] = brands[index]
             return self.data.brands_data[brands[index]]
                 
@@ -353,8 +349,8 @@ class Game:
         
         def undo(self):
             self.data.restore()
-            safe_call(self.preview_change, self.data.sequence)
-            safe_call(self.level_change, self.data.level)
+            safe_call(self.on_preview_change, self.data.sequence)
+            safe_call(self.on_level_change, self.data.level)
             return True
     
     MINIMUM_MOUSE_INTERVAL = 0.2
@@ -365,7 +361,13 @@ class Game:
         self.w.add(hbox)
         self.da = gtk.DrawingArea()
         self.types_view = Game.UI.TypesView()
-        hbox.pack_start(self.types_view)
+        vbox = gtk.VBox()
+        hbox.pack_start(vbox)
+        vbox.pack_start(self.types_view)
+        self.score_label = gtk.Label('Score')
+        self.bonus_label = gtk.Label('Bonus')
+        vbox.pack_start(self.score_label, expand=False)
+        vbox.pack_start(self.bonus_label, expand=False)
         vbox = gtk.VBox()
         hbox.pack_start(vbox)
         self.preview = Game.UI.Preview()
@@ -420,11 +422,16 @@ class Game:
 
             self.game.on_level_change = self.level_change
             self.game.on_preview_change = self.sequence_change
+            self.game.on_score_change = self.set_score
             self.types_view.level = self.data.level
             self.game.start()
             
+    def set_score(self, score, bonus):
+        self.score_label.set_label(str(score))
+        self.bonus_label.set_label(str(bonus))
+    
     def sequence_change(self, sequence):
-        self.preview.pair = sequence[0]
+        self.preview.pair = sequence[1]
         self.preview.draw()
 
     @engine_interaction
@@ -477,11 +484,13 @@ class Game:
         
         # draw next pair
         # TODO: ugly, change it
-        ball_size = 20
-        ball_spacing = 4
-        w = ball_size + ball_spacing
+        rect = self.da.get_allocation()
+        ball_spacing = 0.2
+        ball_size = min(rect.width / (self.data.width * (1 + ball_spacing) - ball_spacing),
+                        rect.height / ((self.data.width + 4) * (1 + ball_spacing) - ball_spacing))
+        w = ball_size * (1 + ball_spacing)
         diff = self.data.position * w
-        left, top, width, height = Game.UI.board_rectangle
+        width, height = rect.width, rect.height
         next = self.data.sequence[0]
         coords = [None, None]
         if self.data.direction == 'up':
@@ -497,28 +506,29 @@ class Game:
             coords[0] = 1, 1
             coords[1] = 0, 1
         
-        for xy, ball in zip(coords, next):
-            x, y = xy[0], xy[1]
-            x, y = x * w + diff + left, y * w + top
+        for (x, y), ball in zip(coords, next):
+            x, y = int(x * w + diff), int(y * w)
             # x2, y2 = x2 * w + diff + left, y2 * w + top
             self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
-            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, x, y, ball_size, ball_size, 0, 360 * 64)
+            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, x, y, int(ball_size), int(ball_size), 0, 360 * 64)
         
         # draw the field
         for c, column in enumerate(self.data.balls):
+            x = int(c * w)
             for l, ball in enumerate(column):
+                y = int(w * (self.data.height - l + 2))
                 self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
                 self.graphics_data.window.draw_arc(self.graphics_data.gc, True, \
-                                        left + c * w, top + height - l * w, \
-                                        ball_size, ball_size, 0, 360 * 64)
+                                        x, y, int(ball_size), int(ball_size), 0, 360 * 64)
         
         # draw the cutoff line
         color_up, color_down = self.graphics_data.cutoff_line_style
-        y = top + height - (self.data.height - 1) * w - ball_spacing / 2
+        y = int(3 * w - ball_spacing / 2)
+        x = int(self.data.width * w - ball_spacing)
         self.graphics_data.gc.set_foreground(color_up)
-        self.graphics_data.window.draw_line(self.graphics_data.gc, left, y - 1, left + width, y - 1)
+        self.graphics_data.window.draw_line(self.graphics_data.gc, 0, y - 1, x, y - 1)
         self.graphics_data.gc.set_foreground(color_down)
-        self.graphics_data.window.draw_line(self.graphics_data.gc, left, y, left + width, y)
+        self.graphics_data.window.draw_line(self.graphics_data.gc, 0, y, x, y)
 
         
 Game().run()
