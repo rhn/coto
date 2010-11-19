@@ -353,7 +353,7 @@ class Game:
             safe_call(self.on_level_change, self.data.level)
             return True
     
-    MINIMUM_MOUSE_INTERVAL = 0.2
+    MINIMUM_MOUSE_INTERVAL = 0.1
     
     def __init__(self):
         self.w = gtk.Window()
@@ -376,7 +376,7 @@ class Game:
         self.w.connect('destroy', self.on_destroy)
         self.da.connect('expose-event', self.on_expose)
         self.da.connect('realize', self.on_realize)
-        self.da.set_events(gtk.gdk.BUTTON_PRESS_MASK)
+        self.w.set_events(gtk.gdk.BUTTON_PRESS_MASK)
         self.w.connect('key-press-event', self.on_keydown)
         self.w.set_default_size(250, 350)
         self.last_mouse_event = time.time()
@@ -408,7 +408,7 @@ class Game:
             self.graphics_data.cutoff_line_style = (colormap.alloc_color('white'), colormap.alloc_color('black'))
             
             # clickety portion
-            self.da.connect('button-press-event', self.on_mouse_press)
+            self.w.connect('button-press-event', self.on_mouse_press)
 
         if not self.game or not self.data:
             self.data = Game.Data()
@@ -443,7 +443,7 @@ class Game:
         if now - prev_mouse_event < self.MINIMUM_MOUSE_INTERVAL:
             return False
             
-        rect = self.da.get_allocation()
+        rect = widget.get_allocation()
         x = event.x - rect.x
         y = event.y - rect.y
         
