@@ -59,49 +59,80 @@ def engine_interaction(method):
     return interaction_wrapper
 
 
+def get_ball_styles(colormap):
+    styles = {}
+    for name in Game.Data.brands:
+        styles[name] = colormap.alloc_color(name)
+    return styles
+ 
+
+
 class Game:
     class UI:
-        class Preview:
-            # minimum offset from the borders (fraction of the ball size)
-            border_x = 0.25
-            border_y = 0.25
-            # distance between ball edges (fraction of the ball size)
-            ball_distance = 0.25
+        class BallDisplay(gtk.DrawingArea):
+            def __init__(self):
+                gtk.DrawingArea.__init__(self)
+                self.connect('realize', self.on_realize)
+                self.connect('expose-event', self.on_expose)
+                self.gc = None
+                self.styles = {}
+
+            def on_realize(self, widget, data=None):
+                self.gc = self.window.new_gc()
+                colormap = self.get_colormap()
+                self.styles = get_ball_styles(colormap)
+   
+            def on_expose(self, widget, data=None):
+                self.draw()
             
-            def get_coords(self, xsize, ysize):
-                """Justified to the left/up.
-                Returns a tuple consisting of balls' coords and ball size.
-                """
-                ball_size = min(xsize / (2 + self.border_x * 2 + \
-                                                      self.ball_distance), \
-                            ysize / (1 + self.border_y * 2))
-                border_x = int(ball_size * self.border_x)
-                border_y = int(ball_size * self.border_y)
-                distance = int(ball_size * self.ball_distance)
-                ball_size = int(ball_size)
-                return ((border_x, border_y), 
-                        (border_x + ball_size + distance, border_y)), ball_size
-        
-        class TypesView: # XXX: make it a DrawingArea
-            def __init__(self, rectangle, level=0):
-                self.rectangle = rectangle
+            def draw_ball(self, ball, size, x, y):
+                self.gc.set_foreground(self.styles[ball])
+                self.window.draw_arc(self.gc, True, x, y, \
+                                                       size, size, 0, 360 * 64)
+
+        class Preview(BallDisplay):
+            BALL_SPACING = 0.25
+            def __init__(self, pair=None):
+                Game.UI.BallDisplay.__init__(self)
+                self.pair = pair
+
+            def draw(self):
+                if self.pair is None:
+                    return
+                rect = self.get_allocation()
+                ball_size = min(int(rect.width / (2 + self.BALL_SPACING)), rect.height)
+
+                for i, ball in enumerate(self.pair):
+                    x = int(i * ball_size * (1 + self.BALL_SPACING))
+                    y = 0
+                    self.draw_ball(ball, ball_size, x, y)
+                
+                
+        class TypesView(BallDisplay):
+            def __init__(self, level=0):
+                Game.UI.BallDisplay.__init__(self)
                 self.level = level
-            
-            def draw(self, graphics_data):
+                
+            def on_realize(self, widget, data=None):
+                Game.UI.BallDisplay.on_realize(self, widget, data)
+                context = self.get_pango_context()
+                self.pango_layout = Layout(context)
+                        
+            def draw(self):
                 # draw the brands
-                left, top, width, height = self.rectangle
-                yoffset = top + 10
-                xoffset = left + 5
-                size = 15
-                distance = 10
-                w = size + distance
+                rect = self.get_allocation()
+                spacing = 10
+                size = min(rect.width / 4, rect.height / len(Game.Data.brands) - spacing)
+                #spacing = 10
+                w = size + spacing
                 for i, brand in enumerate(Game.Data.brands[:self.level + 1]):
-                    graphics_data.gc.set_foreground(graphics_data.styles[brand])
-                    graphics_data.window.draw_arc(graphics_data.gc, True, xoffset, yoffset + i * w, \
+                    
+                    self.gc.set_foreground(self.styles[brand])
+                    self.window.draw_arc(self.gc, True, 0, i * w, \
                                                             size, size, 0, 360 * 64)
-                    graphics_data.pango_layout.set_text(str(Game.Data.brands_data[brand]))
-                    graphics_data.window.draw_layout(graphics_data.gc, xoffset + int(size * 1.5), \
-                                            yoffset + i * w + 3, graphics_data.pango_layout)
+                    self.pango_layout.set_text(str(Game.Data.brands_data[brand]))
+                    self.window.draw_layout(self.gc, int(size * 1.5), \
+                                            i * w + 3, self.pango_layout)
         
         class GraphicsData:
             def __init__(self, window, gc, pango_layout):
@@ -164,6 +195,9 @@ class Game:
         def __init__(self, data):
             self.data = data
             self.on_level_up = None
+            self.on_level_change = None
+            self.on_score_change = None
+            self.on_preview_change = None
             self.over = False # XXX: or False?
             
         @running_event
@@ -194,11 +228,18 @@ class Game:
         def endgame(self):
             print '\nGAME OVER'
             
-        def next_turn(self):
+        def update_sequence(self):
             available = Game.Data.brands[:max(self.data.level, 3)]
             while len(self.data.sequence) < 3:
                 self.data.sequence.append((random.choice(available), \
                                 random.choice(available)))
+            safe_call(self.on_preview_change, self.data.sequence)
+
+        def start(self):
+            self.update_sequence()
+        
+        def next_turn(self):
+            self.update_sequence()
         
         @running_event
         def drop(self):
@@ -312,14 +353,24 @@ class Game:
         
         def undo(self):
             self.data.restore()
+            safe_call(self.preview_change, self.data.sequence)
+            safe_call(self.level_change, self.data.level)
             return True
     
     MINIMUM_MOUSE_INTERVAL = 0.2
     
     def __init__(self):
         self.w = gtk.Window()
+        hbox = gtk.HBox()
+        self.w.add(hbox)
         self.da = gtk.DrawingArea()
-        self.w.add(self.da)
+        self.types_view = Game.UI.TypesView()
+        hbox.pack_start(self.types_view)
+        vbox = gtk.VBox()
+        hbox.pack_start(vbox)
+        self.preview = Game.UI.Preview()
+        vbox.pack_start(self.preview)
+        vbox.pack_start(self.da)
         self.w.connect('destroy', self.on_destroy)
         self.da.connect('expose-event', self.on_expose)
         self.da.connect('realize', self.on_realize)
@@ -331,13 +382,14 @@ class Game:
         self.game = None
         self.data = None
         self.graphics_data = None
-        
-        self.types_view = None
+  
                 
     def on_destroy(self, widget,  data=None):
         gtk.main_quit()
         
     def on_expose(self, widget, data=None):
+        # TODO: use a grid instead
+        self.types_view.set_size_request(self.w.get_allocation().width / 4, 0)
         self.redraw()
         
     def on_realize(self, widget, data=None):
@@ -355,9 +407,6 @@ class Game:
             
             # clickety portion
             self.da.connect('button-press-event', self.on_mouse_press)
-        
-        if self.types_view is None:
-            self.types_view = Game.UI.TypesView((0, 0, 80, 300))
 
         if not self.game or not self.data:
             self.data = Game.Data()
@@ -366,13 +415,17 @@ class Game:
             self.keybindings = {'Up': self.game.rotate,
                                 'Right': self.game.shift_right,
                                 'Left': self.game.shift_left,
-                                'Down': lambda: any((True, self.game.drop())),
-                                'F5': lambda: any((True, self.game.undo()))}
+                                'Down': self.game.drop,
+                                'F5': self.game.undo}
 
-            self.game.on_level_up = self.level_up
+            self.game.on_level_change = self.level_change
+            self.game.on_preview_change = self.sequence_change
             self.types_view.level = self.data.level
-            self.preview = Game.UI.Preview()
-            self.game.next_turn()
+            self.game.start()
+            
+    def sequence_change(self, sequence):
+        self.preview.pair = sequence[0]
+        self.preview.draw()
 
     @engine_interaction
     def on_mouse_press(self, widget, event, data=None):
@@ -380,7 +433,7 @@ class Game:
         now = time.time()
         prev_mouse_event = self.last_mouse_event
         self.last_mouse_event = now
-        if now - prev_mouse_event < self.MINIMUM_MOSE_INTERVAL:
+        if now - prev_mouse_event < self.MINIMUM_MOUSE_INTERVAL:
             return False
             
         rect = self.da.get_allocation()
@@ -400,8 +453,9 @@ class Game:
             else:
                 return self.game.drop()
 
-    def level_up(self, level):
+    def level_change(self, level):
         self.types_view.level = level
+        self.types_view.draw()
         print 'LEVEL:', Game.Data.brands[level], '(' + str(level) + ')'
 
     @engine_interaction
@@ -420,17 +474,6 @@ class Game:
         self.graphics_data.window.clear()
         next_y = 20
         pad_left = 12
-        
-        # draw preview
-        next = self.data.sequence[1]
-        left, top, width, height = Game.UI.preview_rectangle
-        coords_list, size = self.preview.get_coords(width, height)
-        for i, xy in enumerate(coords_list):
-            x, y = xy
-            ball = next[i]
-            self.graphics_data.gc.set_foreground(self.graphics_data.styles[ball])
-            self.graphics_data.window.draw_arc(self.graphics_data.gc, True, left + x, top + y, \
-                                                    size, size, 0, 360 * 64)
         
         # draw next pair
         # TODO: ugly, change it
@@ -477,6 +520,5 @@ class Game:
         self.graphics_data.gc.set_foreground(color_down)
         self.graphics_data.window.draw_line(self.graphics_data.gc, left, y, left + width, y)
 
-        self.types_view.draw(self.graphics_data)
         
 Game().run()
